@@ -49,7 +49,7 @@ class QueueOnce(Task):
 
     @property
     def once_config(self):
-        logger.info(json.dumps(self.config.ONCE))
+        # logger.info(json.dumps(self.config.ONCE))
         return self.config.ONCE
 
     @property
