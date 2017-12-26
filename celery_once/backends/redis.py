@@ -7,6 +7,8 @@ from __future__ import absolute_import
 import json
 import logging
 from time import time
+import sys
+sys.path.append("..")
 
 logger = logging.getLogger('django.request')
 
@@ -88,7 +90,7 @@ class Redis(object):
         Checks if the task is locked and raises an exception, else locks
         the task.
         """
-        from SEW.utils.celery_once.helpers import now_unix
+        from ..helpers import now_unix
         now = now_unix()
         # Check if the tasks is already queued if key is in cache.
         result = self.redis.get(key)
@@ -98,8 +100,8 @@ class Redis(object):
             remaining = int(result) - now
             logger.info("int(result) %d; now %d" % (int(result), now))
             if remaining > 0:
-                from SEW.utils.celery_once import tasks
-                raise tasks.AlreadyQueued(remaining)
+                from ..tasks import AlreadyQueued
+                raise AlreadyQueued(remaining)
 
         # By default, the tasks and the key expire after 60 minutes.
         # (meaning it will not be executed and the lock will clear).
