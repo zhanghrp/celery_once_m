@@ -8,6 +8,8 @@ import json
 import logging
 from time import time
 import sys
+from redis import WatchError
+
 sys.path.append("..")
 
 logger = logging.getLogger('django.request')
@@ -93,19 +95,43 @@ class Redis(object):
         from ..helpers import now_unix
         now = now_unix()
         # Check if the tasks is already queued if key is in cache.
-        result = self.redis.get(key)
-        logger.info("key %s" % key)
-        if result:
-            # Work out how many seconds remaining till the task timeout.
-            remaining = int(result) - now
-            logger.info("int(result) %d; now %d" % (int(result), now))
-            if remaining > 0:
-                from ..tasks import AlreadyQueued
-                raise AlreadyQueued(remaining)
+        with self.redis.pipeline() as pipe:
+            while 1:
+                try:
+                    # put a WATCH on the key that holds our sequence value
+                    pipe.watch(key)
 
-        # By default, the tasks and the key expire after 60 minutes.
-        # (meaning it will not be executed and the lock will clear).
-        self.redis.setex(key, timeout, now + timeout)
+                    # after WATCHing, the pipeline is put into immediate execution
+                    # mode until we tell it to start buffering commands again.
+                    # this allows us to get the current value of our sequence
+
+                    result = pipe.get(key)
+                    logger.info("key %s" % key)
+                    if result:
+                        # Work out how many seconds remaining till the task timeout.
+                        remaining = int(result) - now
+                        logger.info("int(result) %d; now %d" % (int(result), now))
+                        if remaining > 0:
+                            from ..tasks import AlreadyQueued
+                            raise AlreadyQueued(remaining)
+
+                    # now we can put the pipeline back into buffered mode with MULTI
+                    pipe.multi()
+
+                    # By default, the tasks and the key expire after 60 minutes.
+                    # (meaning it will not be executed and the lock will clear).
+                    pipe.setex(key, timeout, now + timeout)
+
+                    # and finally, execute the pipeline (the set command)
+                    pipe.execute()
+                    # if a WatchError wasn't raised during execution, everything
+                    # we just did happened atomically.
+                    break
+                except WatchError:
+                    # another client must have changed 'OUR-SEQUENCE-KEY' between
+                    # the time we started WATCHing it and the pipeline's execution.
+                    # our best bet is to just retry.
+                    continue
 
     def clear_lock(self, key):
         """Remove the lock from redis."""
